@@ -87,7 +87,7 @@ class PlayerInterface():
             return False
 
     def initialize(self):
-        sleep(10) # wait for omxplayer to appear on dbus
+        sleep(3) # wait for omxplayer to appear on dbus
         return self._get_dbus_interface()
 
     def playPause(self):
@@ -181,14 +181,14 @@ class OMXPlayerSync():
             sys.exit(1)
 
         self.omxplayer_options.append("-o %s" % self.options.adev)
-        self.omxplayer_options.append('--no-keys')
+        #self.omxplayer_options.append('--no-keys')
         
         # Enabling this allows you to see through omxplayer during playback to see verbose
         # stats in the terminal on the desktop
         #self.omxplayer_options.append("--alpha 128")
 
-        if not self.options.verbose:
-            self.omxplayer_options.append('--no-osd')
+        #if not self.options.verbose:
+        self.omxplayer_options.append('--no-osd')
 
         if self.options.master:
             self.socket_enable_broadcast()
@@ -237,7 +237,7 @@ class OMXPlayerSync():
         if self.options.slave:
             wait_for_sync = False
             wait_after_sync = False
-            deviations = collections.deque(maxlen=10)
+            deviations = collections.deque(maxlen=5)
             previous_error = 0.0
             sum_error = 0.0
 
@@ -268,26 +268,36 @@ class OMXPlayerSync():
                 deviation = self.position_master - self.position_local
                 deviations.append(deviation)
                 median_deviation = self.median(list(deviations))
-                playbackRate = 1.0 + (deviation * KP) + (previous_error * KP) + (sum_error * KI)
-                previoius_error = deviation
-                sum_error += deviation
-                if self.options.cvp:
-                
+                PID_input = median_deviation
+                playbackRate = 1.0 + (PID_input * KP) + (previous_error * KP) + (sum_error * KI)
+                previoius_error = PID_input
+                sum_error += PID_input
+                if self.options.cvp:                
                     if abs(deviation) > 1.0:
                         self.controller.setPosition(self.position_master)
                         previous_error = 0.0
                         sum_error = 0.0
+                        playbackRate = 1.0
                     self.controller.setRate(playbackRate)
 
 
                 if self.options.verbose:
-                    sys.stdout.write("local: %.2f master: %.2f deviation: %+.2f median_deviation: %+.2f rate: %.4f filename: %s\n" % (
-                        self.position_local,
-                        self.position_master,
+                    if abs(deviation) > 0.07:
+                        color = '\033[0;31m'
+                    if 0.05 < abs(deviation) < 0.07:
+                        color = '\033[0;33m'
+                    if abs(deviation) < 0.05:
+                        color = '\033[0;32m'
+                    if int(self.position_local) % 2 == 0:
+                        background_color = '\033[0;37;44m'
+                    else:
+                        background_color = '\033[39m'    
+                    sys.stdout.write("%sdeviation:%s %+.2f\033[0;39m median_deviation: %+.2f rate: %.4f\n" % (
+                        background_color,
+                        color,
                         deviation,
                         median_deviation,
-                        playbackRate,
-                        self.filename))
+                        playbackRate))
 
                 if wait_for_sync:
                     while True:
