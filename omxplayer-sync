@@ -34,6 +34,11 @@ SYNC_TOLERANCE = .05
 SYNC_GRACE_TIME = 5
 SYNC_JUMP_AHEAD = 3
 
+# PID tuning
+KP = 0.15
+KI = 0.0
+KD = 0.075
+
 OMXPLAYER = 'omxplayer'
 OMXPLAYER_DBUS_ADDR='/tmp/omxplayerdbus.%s' % getpass.getuser()
 PORT = 1666
@@ -111,6 +116,16 @@ class PlayerInterface():
                 'Position')
         except Exception as e:
             return False
+            
+    def setRate(self, delta):
+        try:
+            return self.properties.Set(
+                'org.mpris.MediaPlayer2.Player',
+                'Rate',
+                delta)
+        except Exception as e:
+            print(e)
+            return False       
 
 #
 # OMXPlayer-Sync main class
@@ -141,6 +156,7 @@ class OMXPlayerSync():
         p.add_option('--destination', '-x', default='255.255.255.255')
         p.add_option('--loop', '-u', action='store_true')
         p.add_option('--verbose', '-v', action='store_true')
+        p.add_option('--cvp', '-c', action='store_true')
         p.add_option('--adev', '-o', default='both')
         p.add_option('--aspect', '-a', default=None, help="Aspect Mode - fill, letterbox, stretch")
         self.options, arguments = p.parse_args()
@@ -166,6 +182,10 @@ class OMXPlayerSync():
 
         self.omxplayer_options.append("-o %s" % self.options.adev)
         self.omxplayer_options.append('--no-keys')
+        
+        # Enabling this allows you to see through omxplayer during playback to see verbose
+        # stats in the terminal on the desktop
+        #self.omxplayer_options.append("--alpha 128")
 
         if not self.options.verbose:
             self.omxplayer_options.append('--no-osd')
@@ -218,6 +238,8 @@ class OMXPlayerSync():
             wait_for_sync = False
             wait_after_sync = False
             deviations = collections.deque(maxlen=10)
+            previous_error = 0.0
+            sum_error = 0.0
 
         while True:
             if self.options.slave:
@@ -232,16 +254,11 @@ class OMXPlayerSync():
             if self.hangup_detected():
                 break
 
-            if self.options.verbose:
-                current_frame_local = math.modf(self.position_local)[0]*100/4
-                if self.options.slave:
-                    current_frame_master = math.modf(self.position_master)[0]*100/4
-
             if self.options.master:
                 self.send_position_local()
                 if self.options.verbose:
-                    sys.stdout.write("local: %.2f %.0f\n" %
-                        (self.position_local, current_frame_local))
+                    sys.stdout.write("local: %.2f\n" %
+                        (self.position_local))
 
             if self.options.slave:
                 if self.filename != self.filename_master:
@@ -251,15 +268,25 @@ class OMXPlayerSync():
                 deviation = self.position_master - self.position_local
                 deviations.append(deviation)
                 median_deviation = self.median(list(deviations))
+                playbackRate = 1.0 + (deviation * KP) + (previous_error * KP) + (sum_error * KI)
+                previoius_error = deviation
+                sum_error += deviation
+                if self.options.cvp:
+                
+                    if abs(deviation) > 1.0:
+                        self.controller.setPosition(self.position_master)
+                        previous_error = 0.0
+                        sum_error = 0.0
+                    self.controller.setRate(playbackRate)
+
 
                 if self.options.verbose:
-                    sys.stdout.write("local: %.2f %.0f master: %.2f %.0f deviation: %.2f median_deviation: %.2f filename: %s\n" % (
+                    sys.stdout.write("local: %.2f master: %.2f deviation: %+.2f median_deviation: %+.2f rate: %.4f filename: %s\n" % (
                         self.position_local,
-                        current_frame_local,
                         self.position_master,
-                        current_frame_master,
                         deviation,
                         median_deviation,
+                        playbackRate,
                         self.filename))
 
                 if wait_for_sync:
@@ -273,28 +300,28 @@ class OMXPlayerSync():
                              wait_for_sync = False
                              wait_after_sync = time()
                              break
-
                     continue
+                    
+                if not self.options.cvp:
+                    if wait_after_sync:
+                        if (time() - wait_after_sync) > SYNC_GRACE_TIME:
+                             wait_after_sync = False
 
-                if wait_after_sync:
-                    if (time() - wait_after_sync) > SYNC_GRACE_TIME:
-                         wait_after_sync = False
+                        continue
 
-                    continue
+                    if abs(median_deviation) > SYNC_TOLERANCE \
+                    and self.position_local > SYNC_GRACE_TIME \
+                    and self.position_master > SYNC_GRACE_TIME:
+                        if self.options.verbose:
+                            print("jump to %.2f" % (self.position_master + SYNC_JUMP_AHEAD))
+                            print("enter pause...")
+                        if not self.controller.playPause():
+                            break
+                        if not self.controller.setPosition(self.position_master + SYNC_JUMP_AHEAD):
+                            break
 
-                if abs(median_deviation) > SYNC_TOLERANCE \
-                and self.position_local > SYNC_GRACE_TIME \
-                and self.position_master > SYNC_GRACE_TIME:
-                    if self.options.verbose:
-                        print("jump to %.2f" % (self.position_master + SYNC_JUMP_AHEAD))
-                        print("enter pause...")
-                    if not self.controller.playPause():
-                        break
-                    if not self.controller.setPosition(self.position_master + SYNC_JUMP_AHEAD):
-                        break
-
-                    wait_for_sync = True
-                    wait_after_sync = time()
+                        wait_for_sync = True
+                        wait_after_sync = time()
 
             if self.options.master:
                 sleep(1)
