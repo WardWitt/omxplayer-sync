@@ -181,7 +181,7 @@ class OMXPlayerSync():
             sys.exit(1)
 
         self.omxplayer_options.append("-o %s" % self.options.adev)
-        #self.omxplayer_options.append('--no-keys')
+        self.omxplayer_options.append('--no-keys')
         
         # Enabling this allows you to see through omxplayer during playback to see verbose
         # stats in the terminal on the desktop
@@ -268,7 +268,7 @@ class OMXPlayerSync():
                 deviation = self.position_master - self.position_local
                 deviations.append(deviation)
                 median_deviation = self.median(list(deviations))
-                PID_input = median_deviation
+                PID_input = deviation
                 playbackRate = 1.0 + (PID_input * KP) + (previous_error * KP) + (sum_error * KI)
                 previoius_error = PID_input
                 sum_error += PID_input
